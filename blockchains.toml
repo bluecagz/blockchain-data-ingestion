@@ -1,0 +1,9 @@
+[blockchains]
+  
+# [blockchains.ETH]
+# schemas = ["transactions"]
+# start_block = 21563214
+
+[blockchains.ARB]
+schemas = ["transactions"]
+start_block = 293035442
