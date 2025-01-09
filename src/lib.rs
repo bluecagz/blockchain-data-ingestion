@@ -1,88 +1,120 @@
 pub mod blockchain;
+pub mod streams;
 pub mod utils;
 
+
+use tokio::task;
+use dotenv::dotenv;
 use anyhow::{Context, Result};
-use log::{error, info};
+use std::{env, collections::HashMap};
+use futures_util::future;
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    env,
-    fs,
-};
+use log::{error};
 
-use crate::blockchain::adapters::{BlockchainAdapter, EVMAdapter};
+// Re-export adapters, etc. so outside code can use them directly if needed
+pub use blockchain::evm_adapter::EVMAdapter;
+pub use blockchain::adapters::BlockchainAdapter;
+pub use streams::producer::{produce_latest_block, produce_historical, produce_realtime};
+pub use streams::consumer::consume_and_store;
 
+/// Configuration for each chain in `blockchains.toml`
 #[derive(Debug, Deserialize)]
 pub struct BlockchainConfig {
+    pub adapter_type: String,
     pub schemas: Vec<String>,
-    pub start_block: u64,
+    pub start_block: Option<u64>,
+    pub end_block: Option<u64>,
+    pub http_url: String,
+    pub ws_url: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Config {
+pub struct ConfigToml {
     pub blockchains: HashMap<String, BlockchainConfig>,
 }
 
-// Load configuration from the specified path
-pub fn load_config(path: &str) -> Result<Config> {
-    let content = fs::read_to_string(path).context("Failed to read config file")?;
-    let config = toml::from_str(&content).context("Failed to parse config file")?;
-    Ok(config)
-}
+/// This function does the main “orchestration”:
+/// 1) Reads `blockchains.toml`
+/// 2) For each chain, spawns producer tasks for historical + real-time
+/// 3) Optionally spawns a consumer
+/// 4) Waits until tasks complete (or runs forever, if you like)
+pub async fn run_ingestion() -> Result<()> {
+    // Load environment variables from .env file
+    dotenv().ok();
 
-// Ingest blockchain data based on the configuration
-pub async fn get_blockchain_data(config: &Config) -> Result<()> {
-    for (chain_name, chain_config) in &config.blockchains {
-        match chain_name.as_str() {
-            "ETH" => {
-                let rpc_url = env::var("ETHEREUM_URL").context("ETHEREUM_URL not set")?;
-                let adapter = EVMAdapter::new(&rpc_url);
-                ingest_with_adapter(chain_name, &adapter, &chain_config.schemas, chain_config.start_block).await?;
+    // 1) Load `blockchains.toml`
+    let config_str = std::fs::read_to_string("blockchains.toml")?;
+    let mut config: ConfigToml = toml::from_str(&config_str)?;
+
+    // 2) Replace placeholders with actual environment variable values
+    //    i.e. if http_url = "HTTP_URL_MAINNET" then we do env::var("HTTP_URL_MAINNET")
+    for (_, chain_cfg) in config.blockchains.iter_mut() {
+        chain_cfg.http_url = env::var(&chain_cfg.http_url)
+            .with_context(|| format!("Failed to get HTTP URL from environment for key `{}`", &chain_cfg.http_url))?;
+        chain_cfg.ws_url = env::var(&chain_cfg.ws_url)
+            .with_context(|| format!("Failed to get WebSocket URL from environment for key `{}`", &chain_cfg.ws_url))?;
+    }
+
+    // 3) Prepare a list of async tasks we’ll await later
+    let mut tasks = Vec::new();
+
+    for (chain_name, chain_cfg) in config.blockchains {
+        match chain_cfg.adapter_type.as_str() {
+            "EVM" => {
+                let adapter = EVMAdapter::new(
+                    &chain_name,
+                    &chain_cfg.http_url,
+                    &chain_cfg.ws_url
+                ).await?;
+
+                // +++ CALL produce_latest_block IMMEDIATELY +++
+                if let Err(e) = produce_latest_block(&adapter).await {
+                    error!("Error in produce_latest_block for {}: {}", chain_name, e);
+                }
+
+                // If we have a start_block, spawn historical ingestion
+                if let Some(start_block) = chain_cfg.start_block {
+                    let end_block = chain_cfg.end_block.unwrap_or(u64::MAX);
+                    let adapter_for_hist = adapter.clone();
+                    let chain_name_hist = chain_name.clone();
+                    tasks.push(task::spawn(async move {
+                        if let Err(e) = produce_historical(&adapter_for_hist, start_block, end_block).await {
+                            error!("Error in produce_historical for {}: {}", chain_name_hist, e);
+                        }
+                    }));
+                }
+
+                // Also spawn real-time ingestion
+                let adapter_for_rt = adapter.clone();
+                let chain_name_rt = chain_name.clone();
+                tasks.push(task::spawn(async move {
+                    if let Err(e) = produce_realtime(adapter_for_rt).await {
+                        error!("Error in produce_realtime for {}: {}", chain_name_rt, e);
+                    }
+                }));
             }
-            "ARB" => {
-                let rpc_url = env::var("ARBITRUM_URL").context("ARBITRUM_URL not set")?;
-                let adapter = EVMAdapter::new(&rpc_url);
-                ingest_with_adapter(chain_name, &adapter, &chain_config.schemas, chain_config.start_block).await?;
-            }
+
             _ => {
-                error!("Unknown chain: {}. Skipping.", chain_name);
+                error!("Unknown adapter_type `{}` for chain `{}`. Skipping.", chain_cfg.adapter_type, chain_name);
+                continue;
             }
         }
     }
-    Ok(())
-}
 
-// Ingest data for a specific blockchain using the provided adapter
-async fn ingest_with_adapter(
-    chain_name: &str,
-    adapter: &impl BlockchainAdapter,
-    schemas: &[String],
-    start_block: u64,
-) -> Result<()> {
-    info!("Starting ingestion for chain: {}", chain_name);
-    let block = adapter.get_block_by_number(start_block).await.map_err(|e| {
-        error!("Error getting block by number: {:?}", e);
-        anyhow::Error::msg(e.to_string())
-    }).context("Failed to get block by number")?;
-    
-    // Extract the block hash and transactions
-    let block_hash = block.hash;
-    let transactions = block.transactions.iter().map(|tx| tx.hash.to_string()).collect::<Vec<_>>();
-    
-    // Print the block hash and transactions
-    info!("Fetched block #{} from {}: hash: {:?}, transactions: {:?}", start_block, chain_name, block_hash, transactions);
 
-    info!("Requested schemas for {}: {:?}", chain_name, schemas);
+    // 4) (Optional) spawn a consumer in the same process
+    tasks.push(task::spawn(async move {
+        if let Err(e) = consume_and_store().await {
+            error!("Consumer error: {}", e);
+        }
+    }));
 
-    // Fetch native transactions and their receipts
-    let transactions_with_receipts = adapter.get_native_transactions(start_block).await.map_err(|e| {
-        error!("Error getting native transactions: {:?}", e);
-        anyhow::Error::msg(e.to_string())
-    }).context("Failed to get native transactions")?;
-    for (tx_hash, receipt) in transactions_with_receipts {
-        info!("Transaction blockNumber: {:?}, Transaction hash: {}", receipt.block_number, tx_hash);
+    // 5) Wait for all tasks to complete
+    //    If you want them to run indefinitely, you can do an infinite loop or keep using select_all.
+    let (res, _idx, _remaining) = future::select_all(tasks).await;
+    if let Err(e) = res {
+        eprintln!("A task returned an error: {}", e);
     }
 
-    info!("Finished ingestion for chain: {}", chain_name);
     Ok(())
 }
