@@ -1,9 +1,15 @@
 [blockchains]
   
 # [blockchains.ETH]
+# adapter_type = "EVM"
 # schemas = ["transactions"]
 # start_block = 21563214
+# http_url = "ETHEREUM_URL"
+# ws_url = "ETHEREUM_URL_WS"
 
 [blockchains.ARB]
+adapter_type = "EVM"
 schemas = ["transactions"]
-start_block = 293035442
+start_block = 293035442 # adding start block will turn on the historical stream
+http_url = "ARBITRUM_URL"
+ws_url = "ARBITRUM_URL_WS"

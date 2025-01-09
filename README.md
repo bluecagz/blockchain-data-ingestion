@@ -31,8 +31,11 @@ This repository centralizes the ingestion logic, schemas, transformations, and c
 
 ## Features
 - **Multi-Chain Support:** Ingest data from various blockchain networks by simply updating configuration files or toggling relevant connectors.
-- **Modular Connectors:** Easily add or remove connectors for new networks or data types (e.g., blocks, transactions, token transfers).
-- **Scalable Architecture:** Support both batch and streaming ingestion modes for small or large data loads.
+- **EVM Adapter (WIP):** Includes an EVM-based adapter (`EVMAdapter`) that lets you:
+  - Fetch historical blocks over a specified range.
+  - Subscribe to new blocks for real-time ingestion.
+  - Retrieve the latest block and its transactions.
+- **Scalable Architecture:** Support both batch (historical) and streaming ingestion modes for small or large data loads.
 - **Multiple Storage Backends:** Choose between **Postgres** or **DuckDB** to persist your blockchain data.
 - **Data Validation:** Basic schema validation to ensure that ingested data is consistent and accurate.
 
@@ -42,22 +45,22 @@ This repository centralizes the ingestion logic, schemas, transformations, and c
 
 ```mermaid
 flowchart TD
-    A[Blockchain Network] --> B[Data Connector/Fetcher]
+    A[Blockchain Network] --> B[Data Connector/Fetcher (EVMAdapter)]
     B --> C[Data Processing/Transformation]
     C --> D[Postgres / DuckDB]
     D --> E[Analytics & Visualization / Services / Endpoints]
 ```
 
 1. **Data Connector/Fetcher**  
-   Connect to blockchain nodes or provider APIs to fetch block and transaction data.
+   - Connect to blockchain nodes or provider APIs (Infura, Alchemy, self-hosted, etc.) via adapters like `EVMAdapter`.
 
 2. **Data Processing/Transformation**  
-   Apply transformations, parse logs, decode ABI events, and clean data into a usable format.
+   - Apply transformations, parse logs, decode ABI events, and clean data into a usable format.
 
 3. **Postgres / DuckDB**  
-   Store structured data in your preferred SQL engine (Postgres or DuckDB).  
-   - **Postgres** for more traditional client-server setups.  
-   - **DuckDB** for local analytics, small-footprint embedding, or single-file portability.
+   - Store structured data in your preferred SQL engine (Postgres or DuckDB).  
+     - **Postgres** for more traditional client-server setups.  
+     - **DuckDB** for local analytics, small-footprint embedding, or single-file portability.
 
 4. **Analytics & Visualization / Services / Endpoints**  
    - Consume data for queries or dashboards.  
@@ -71,9 +74,7 @@ flowchart TD
 - **Rust** (version 1.60+ recommended). Install using [rustup](https://rustup.rs/).  
 - **cargo** (comes with Rust, used to build and run the project).  
 - **A blockchain node or provider** (Infura, Alchemy, or a self-hosted node for the chain(s) of your choice).  
-- **Database**  
-  - [Postgres](https://www.postgresql.org/) if you plan to store data in a traditional client-server database.  
-  - [DuckDB](https://duckdb.org/) if you prefer a local, embedded database that stores data in a single file.  
+
 
 ### Installation
 
@@ -118,27 +119,48 @@ Depending on your configuration, this might:
 - Connect to a specified blockchain provider (Infura, Alchemy, etc.).
 - Start fetching blocks/transactions from a given start block.
 - Process data and store it in Postgres or DuckDB, as configured.
+- Subscribe to real-time blocks for ongoing ingestion.
 
-### Streaming vs. Batch
-- **Batch Mode**: Useful for historical data ingestion over a specific block range.  
-- **Streaming Mode**: For near real-time ingestion; automatically fetches new blocks as they are finalized.
+### Historical, Real-Time, and Latest-Block Ingestion
+
+This project supports multiple ingestion strategies:
+
+1. **Historical Ingestion**  
+   - Fetch blocks within a range (`start_block..end_block`).  
+   - Retries or backoff are implemented for rate-limit errors (HTTP 429).
+
+2. **Real-Time Subscription**  
+   - Connect via WebSocket to watch new blocks and ingest them as they appear.
+
+3. **Latest Block Retrieval**  
+   - Fetch the most recent block number, retrieve its transactions, and log them (or store them).  
+   - Useful as a quick check that the pipeline is working.
 
 ---
 
 ## Configuration
 
-**`config/` Folder**  
-Contains network-specific configuration files...:
-- RPC or provider endpoints  
-- Rate limits  
-- Data parsing rules  
+**`blockchains.toml`**  
+Defines each chain, its adapter type (e.g., `"EVM"`), and the RPC endpoints to use. Example:
+
+```toml
+[blockchains.ARB]
+adapter_type = "EVM"
+schemas = ["transactions"]
+start_block = 293035442 # adding start block will turn on the historical stream
+http_url = "ARBITRUM_URL"
+ws_url = "ARBITRUM_URL_WS"
+```
+
+Values like `http_url` or `ws_url` refer to environment variables in your `.env` (e.g., `HTTP_URL_ARBITRUM`).
 
 **`.env` File**  
 Holds environment variables such as:  
-...
+```
+ARBITRUM_URL="https://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
+ARBITRUM_URL_WS="wss://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
 
-
-Adjust these configurations to match your environment before running the pipeline.
+```
 
 ---
 
@@ -178,10 +200,10 @@ You can adapt these models to reflect more specialized data points (e.g., token 
 
 ## Roadmap
 - **Additional Chains**: Expand beyond Ethereum, Arbitrum, and Polygon, e.g., Avalanche, Optimism, BSC, etc.
+- **MQ Integration**: Integrate Pulsar or Kafka for publishing block/transaction messages to downstream consumers.
 - **Advanced Querying**: Explore custom SQL queries or engine optimizations for Postgres and DuckDB.
-- **Orchestration**: Integrate with Airflow, Dagster, or other workflow tools for production pipelines.
 - **Monitoring & Alerting**: Add metrics support (e.g., Prometheus) and real-time alerts.
-- **Enhanced Data Validation**: Incorporate stricter schema checks for protocol-specific events.
+
 
 ---
 
