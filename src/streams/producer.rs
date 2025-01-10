@@ -1,94 +1,93 @@
 use crate::blockchain::adapters::BlockchainAdapter;
-use futures_util::StreamExt;
 use log::{info, error};
+use serde::{Serialize, Deserialize};
+use futures_util::StreamExt;
+use anyhow::Result;
+use crate::utils::pulsar_utils::BlockProducer;
+use pulsar::Producer;
+use std::sync::Arc;
 
-/// Example: produce historical blocks from [start_block..=end_block].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BlockMessage {
+    pub chain_name: String,
+    pub block_number: u64,
+    pub hash: String,
+    pub tx_count: usize,
+}
+
+/// Produce historical blocks and send to Pulsar
 pub async fn produce_historical<A: BlockchainAdapter>(
     adapter: &A,
     start_block: u64,
     end_block: u64,
-) -> anyhow::Result<()> {
-    for block_num in start_block..=end_block {
-        match adapter.get_block_by_number(block_num).await {
-            Ok(Some(block)) => {
-                let hash = block.hash.unwrap_or_default();
-                let tx_count = block.transactions.len();
-                info!(
-                    "Produced block #{} on {} => hash={:#x}, #tx={}",
-                    block_num,
-                    adapter.chain_name(),
-                    hash,
-                    tx_count
-                );
-                // TODO: send to MQ or store in DB
+    pulsar_producer: Arc<Producer<String, TokioExecutor>>, // Take Arc<Producer> by value
+) -> Result<(), anyhow::Error> {
+    for block_number in start_block..=end_block {
+        match adapter.get_block_by_number(block_number).await? {
+            Some(block) => {
+                let block_number = block.number.map_or(0, |n| n.as_u64()); // Handle Option<U64>
+                let block_message = BlockMessage {
+                    chain_name: adapter.chain_name().to_string(),
+                    block_number,
+                    hash: format!("{:#x}", block.hash.unwrap_or_default()),
+                    tx_count: block.transactions.len(),
+                };
+
+                // Serialize to JSON string
+                let msg = serde_json::to_string(&block_message)?;
+
+                // Send the message
+                pulsar_producer.send(msg).await.map_err(|e| {
+                    error!("Failed to send message to Pulsar: {}", e);
+                    anyhow::anyhow!(e)
+                })?;
+
+                info!("Sent block {} to Pulsar", block_number);
             }
-            Ok(None) => {
+            None => {
                 info!(
                     "No block found at #{} on {}",
-                    block_num,
+                    block_number,
                     adapter.chain_name(),
                 );
             }
-            Err(e) => {
-                error!("Error fetching block #{} on {}: {}", block_num, adapter.chain_name(), e);
-            }
         }
     }
     Ok(())
 }
 
-/// Example: produce new blocks in real-time (just the block hashes).
-pub async fn produce_realtime<A: BlockchainAdapter>(adapter: A) -> anyhow::Result<()> {
-    let mut block_hash_stream = adapter.subscribe_new_blocks();
-    info!("Starting real-time subscription for {}...", adapter.chain_name());
+/// Produce real-time blocks and send to Pulsar
+pub async fn produce_realtime<A: BlockchainAdapter>(
+    adapter: A,
+    pulsar_producer: Arc<Producer<String, TokioExecutor>>, // Take Arc<Producer> by value
+) -> Result<(), anyhow::Error> {
+    let mut stream = adapter.subscribe_new_blocks();
+    while let Some(block_result) = stream.next().await {
+        match block_result {
+            Ok(block) => {
+                let block_number = block.number.map_or(0, |n| n.as_u64()); // Handle Option<U64>
+                let block_message = BlockMessage {
+                    chain_name: adapter.chain_name().to_string(),
+                    block_number,
+                    hash: format!("{:#x}", block.hash.unwrap_or_default()),
+                    tx_count: block.transactions.len(),
+                };
 
-    while let Some(next_hash_res) = block_hash_stream.next().await {
-        match next_hash_res {
-            Ok(block_hash) => {
-                info!("New block on {} => {:?}", adapter.chain_name(), block_hash);
-                // In future, you could fetch the full block with get_block_by_number(...)
-                // to get transactions, then send to MQ
+                // Serialize to JSON string
+                let msg = serde_json::to_string(&block_message)?;
+
+                // Send the message
+                pulsar_producer.send(msg).await.map_err(|e| {
+                    error!("Failed to send message to Pulsar: {}", e);
+                    anyhow::anyhow!(e)
+                })?;
+
+                info!("Sent block {} to Pulsar", block_number);
             }
             Err(e) => {
-                error!("Subscription error on {}: {}", adapter.chain_name(), e);
+                error!("Failed to get new block: {}", e);
             }
         }
     }
-    Ok(())
-}
-
-/// Fetch the latest block number and print its transaction hashes
-pub async fn produce_latest_block<A: BlockchainAdapter>(adapter: &A) -> anyhow::Result<()> {
-    let latest_num = adapter.get_latest_block_number().await?;
-    info!("Latest block number on {} is {}", adapter.chain_name(), latest_num);
-
-    match adapter.get_block_by_number(latest_num).await {
-        Ok(Some(block)) => {
-            let block_hash = block.hash.unwrap_or_default();
-            info!(
-                "Latest block #{} => hash={:#x}, #tx={}",
-                latest_num,
-                block_hash,
-                block.transactions.len()
-            );
-            for tx in block.transactions {
-                info!("Tx hash: {:?}", tx.hash);
-            }
-        }
-        Ok(None) => {
-            info!(
-                "No block returned for the latest block number on {}",
-                adapter.chain_name()
-            );
-        }
-        Err(e) => {
-            error!(
-                "Error fetching the latest block on {}: {}",
-                adapter.chain_name(),
-                e
-            );
-        }
-    }
-
     Ok(())
 }

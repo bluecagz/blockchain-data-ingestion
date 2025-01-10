@@ -4,9 +4,9 @@ use std::pin::Pin;
 use crate::blockchain::adapters::BlockchainAdapter;
 use ethers::{
     providers::{Http, Provider, Ws, Middleware},
-    types::{Block, Transaction, H256},
+    types::{Block, Transaction},
 };
-use std::{sync::Arc};
+use std::sync::Arc;
 use futures_core::{Future, Stream};
 use anyhow::{Result as AnyResult, anyhow};
 
@@ -60,8 +60,9 @@ impl BlockchainAdapter for EVMAdapter {
 
     fn subscribe_new_blocks(
         &self,
-    ) -> Pin<Box<dyn Stream<Item = AnyResult<H256>> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = AnyResult<Block<Transaction>>> + Send>> {
         let provider = Arc::clone(&self.ws_provider);
+        let http_provider = Arc::clone(&self.http_provider);
 
         let stream = try_stream! {
             let mut sub = provider
@@ -70,8 +71,14 @@ impl BlockchainAdapter for EVMAdapter {
                 .map_err(|e| anyhow!("watch_blocks() failed: {}", e))?;
 
             while let Some(hash_val) = sub.next().await {
-                // no error inside the item itself, so just yield Ok(...)
-                yield hash_val;
+                // Fetch the full block data using the hash
+                let block = http_provider
+                    .get_block_with_txs(hash_val)
+                    .await
+                    .map_err(|e| anyhow!("Error fetching block for hash {}: {}", hash_val, e))?
+                    .ok_or_else(|| anyhow!("Block not found for hash {}", hash_val))?;
+
+                yield block;
             }
         };
         Box::pin(stream)
