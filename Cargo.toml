@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 async-stream = "0.3.6"
+async-trait = "0.1.50"
 dotenv = "0.15"
 ethers = { version = "2.0", features = ["ws"] }
 env_logger = "0.10"
@@ -25,6 +26,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tokio-postgres = "0.7"
 toml = "0.8"
+sqlx = { version = "0.5", features = ["runtime-tokio-native-tls", "postgres", "migrate"] }
 walkdir = "2.3"
 
 [features]

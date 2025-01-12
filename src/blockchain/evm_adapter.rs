@@ -1,5 +1,4 @@
 use async_stream::try_stream;
-use futures_util::StreamExt;
 use std::pin::Pin;
 use crate::blockchain::adapters::BlockchainAdapter;
 use ethers::{
@@ -9,6 +8,7 @@ use ethers::{
 use std::sync::Arc;
 use futures_core::{Future, Stream};
 use anyhow::{Result as AnyResult, anyhow};
+use futures_util::StreamExt;
 
 #[derive(Clone)]
 pub struct EVMAdapter {
