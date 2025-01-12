@@ -1,51 +1,34 @@
+pub mod streams;
 pub mod blockchain;
 pub mod storage;
-pub mod streams;
 
-use crate::blockchain::evm_adapter::EVMAdapter;
-use std::{env, collections::HashMap};
+use anyhow::Context;
+use tokio::runtime::Builder;
 use tokio::task;
-use dotenv::dotenv;
-use anyhow::{Context, Result};
-use futures_util::future;
+use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use log::error;
-use std::sync::{Arc, Mutex};
+use futures_util::future;
+use std::env;
+use dotenv::dotenv;
+use std::collections::HashMap;
 
-// Import the new Pulsar utilities.
 use crate::streams::message_queue::pulsar::{create_producer, create_consumer, PulsarClient};
-use crate::streams::consumers::evm_consumer::EVMConsumer;
-// Import the producer type.
-use crate::streams::producers::evm_producer::EVMProducer;
-use crate::streams::producers::producer::StreamProducer; // Ensure this is imported
+use crate::blockchain::evm_adapter::EVMAdapter;
 
-/// Configuration for each chain in `blockchains.toml`
-#[derive(Debug, serde::Deserialize)]
-pub struct BlockchainConfig {
-    pub adapter_type: String, // e.g. "EVM"
-    pub schemas: Vec<String>,
-    pub start_block: Option<u64>,
-    pub end_block: Option<u64>,
-    pub http_url: String, // Will be looked up in env for the actual value
-    pub ws_url: String,   // Will be looked up in env for the actual value
-}
+use crate::streams::producers::evm_producer::EVMProducer;
+use crate::streams::consumers::evm_consumer::EVMConsumer;
+use crate::streams::producers::producer::StreamProducer;
+use crate::streams::consumers::consumer::StreamConsumer;
+
 
 /// The top-level configuration structure.
 #[derive(Debug, serde::Deserialize)]
 pub struct ConfigToml {
-    pub blockchains: HashMap<String, BlockchainConfig>,
+    pub blockchains: HashMap<String>,
 }
 
-/// The main ingestion orchestration function.
-/// 
-/// This function does the following:
-/// 1) Reads and parses `blockchains.toml`
-/// 2) Replaces URL placeholders with actual environment values
-/// 3) Initializes the Pulsar client and creates a producer using the new message_queue module
-/// 4) For each blockchain defined in the configuration:
-///      - Creates an appropriate blockchain adapter (e.g. EVMAdapter)
-///      - Spawns tasks for historical and real-time ingestion using the new EVMProducer
-/// 5) Spawns a consumer task (using the new EVMConsumer that relies on a generic MessageConsumer)
-/// 6) Waits for all tasks to complete (or runs indefinitely)
 pub async fn run_ingestion() -> Result<()> {
     // Load environment variables from the .env file.
     dotenv().ok();
@@ -91,15 +74,9 @@ pub async fn run_ingestion() -> Result<()> {
                 for schema in chain_cfg.schemas {
                     // Create a producer for each schema.
                     let producer_topic = format!("{}{}-{}", &producer_topic_prefix, &chain_name, &schema);
-                    let producer = create_producer(&pulsar, &producer_topic).await
-                        .context(format!("Failed to create Pulsar producer for schema `{}`", schema))?;
 
                     // Clone the adapter for different tasks.
                     let adapter_clone_rt = Arc::new(Mutex::new(adapter.clone()));
-
-                    // Clone the Pulsar producer.
-                    let producer_wrap = Arc::new(producer);
-                    let producer_clone_rt = Arc::clone(&producer_wrap);
 
                     let producer_topic_hist = producer_topic.clone() + "-historical";
 
@@ -107,26 +84,35 @@ pub async fn run_ingestion() -> Result<()> {
                     if let Some(start_block) = chain_cfg.start_block {
                         let producer_hist = create_producer(&pulsar, &producer_topic_hist).await
                             .context(format!("Failed to create Pulsar producer for schema `{}`", schema))?;
-                        
+                        let producer_hist_wrap = Arc::new(Mutex::new(producer_hist));
                         let adapter_clone_hist = Arc::new(Mutex::new(adapter.clone()));
 
                         let end_block = chain_cfg.end_block.unwrap_or(u64::MAX);
                         let chain_name_hist = chain_name.clone();
-                        tasks.push(task::spawn(async move {
-                            // Create an EVMProducer for historical production.
-                            let evm_producer = EVMProducer::new(adapter_clone_hist, producer_hist).await?;
-                            evm_producer.produce_historical(start_block, end_block).await?;
-                            Ok::<(), anyhow::Error>(())
+                        tasks.push(task::spawn_blocking(move || {
+                            let rt = Builder::new_multi_thread().enable_all().build().unwrap();
+                            rt.block_on(async move {
+                                // Create an EVMProducer for historical production.
+                                let evm_producer = EVMProducer::new(adapter_clone_hist, producer_hist_wrap).await?;
+                                evm_producer.produce_historical(start_block, end_block).await?;
+                                Ok::<(), anyhow::Error>(())
+                            })
                         }));
                     }
 
                     // Real-time ingestion task.
+                    let producer_rt = create_producer(&pulsar, &producer_topic).await
+                        .context(format!("Failed to create Pulsar producer for schema `{}`", schema))?;
+                    let producer_rt_wrap = Arc::new(Mutex::new(producer_rt));
                     let chain_name_rt = chain_name.clone();
-                    tasks.push(task::spawn(async move {
-                        // Create an EVMProducer for real-time production.
-                        let evm_producer = EVMProducer::new(adapter_clone_rt, Arc::try_unwrap(producer_clone_rt).unwrap()).await?;
-                        evm_producer.produce_realtime().await?;
-                        Ok::<(), anyhow::Error>(())
+                    tasks.push(task::spawn_blocking(move || {
+                        let rt = Builder::new_multi_thread().enable_all().build().unwrap();
+                        rt.block_on(async move {
+                            // Create an EVMProducer for real-time production.
+                            let evm_producer = EVMProducer::new(adapter_clone_rt, producer_rt_wrap).await?;
+                            evm_producer.produce_realtime().await?;
+                            Ok::<(), anyhow::Error>(())
+                        })
                     }));
                 }
             }
@@ -145,16 +131,19 @@ pub async fn run_ingestion() -> Result<()> {
     let pg_connection_str = env::var("POSTGRES_CONNECTION")
         .unwrap_or_else(|_| "host=localhost user=postgres password=secret dbname=mydb".to_string());
 
-    let mut evm_consumer = EVMConsumer::new(
+    let evm_consumer = EVMConsumer::new(
         pulsar.clone(),
         consumer_topic,
         consumer_subscription,
-        pg_connection_str,
-    );
-    tasks.push(task::spawn(async move {
-        if let Err(e) = evm_consumer.postgres_consume().await {
-            error!("Consumer error: {}", e);
-        }
+        &pg_connection_str,
+    ).await?;
+    tasks.push(task::spawn_blocking(move || {
+        let rt = Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            if let Err(e) = evm_consumer.postgres_consume().await {
+                error!("Consumer error: {}", e);
+            }
+        })
     }));
 
     // 6) Wait for all tasks to complete.

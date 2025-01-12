@@ -3,6 +3,7 @@ use pulsar::{Pulsar, Producer, Consumer, ConsumerOptions, SubType, TokioExecutor
 use pulsar::consumer::InitialPosition;
 use pulsar::DeserializeMessage;
 
+#[derive(Clone)]
 pub struct PulsarClient {
     client: Pulsar<TokioExecutor>,
 }
