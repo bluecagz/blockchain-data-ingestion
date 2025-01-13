@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 async-stream = "0.3.6"
+async-trait = "0.1.50"
 dotenv = "0.15"
 ethers = { version = "2.0", features = ["ws"] }
 env_logger = "0.10"
@@ -15,13 +16,17 @@ futures = "0.3"
 futures-core = "0.3"
 futures-util = "0.3"
 log = "0.4"
+pulsar = { version = "4.1", features = ["tokio"] }
+pulsar-utils = "0.0.1"
 reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
 tokio-stream = "0.1"
+tokio-postgres = "0.7"
 toml = "0.8"
+sqlx = { version = "0.5", features = ["postgres", "runtime-tokio-rustls", "macros", "time", "json"] }
 walkdir = "2.3"
 
 [features]
