@@ -11,5 +11,6 @@
 adapter_type = "EVM"
 schemas = ["blocks", "transactions"]
 # start_block = 293035442 # adding start block will turn on the historical stream
+# end_block = 300000000 # Optional
 http_url = "ARBITRUM_URL"
 ws_url = "ARBITRUM_URL_WS"

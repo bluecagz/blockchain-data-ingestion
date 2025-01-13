@@ -26,7 +26,7 @@ tokio = { version = "1", features = ["full", "rt-multi-thread"] }
 tokio-stream = "0.1"
 tokio-postgres = "0.7"
 toml = "0.8"
-sqlx = { version = "0.5", features = ["runtime-tokio-native-tls", "postgres", "migrate"] }
+sqlx = { version = "0.5", features = ["postgres", "runtime-tokio-rustls", "macros", "time", "json"] }
 walkdir = "2.3"
 
 [features]

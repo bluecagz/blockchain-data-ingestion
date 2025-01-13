@@ -39,9 +39,9 @@ impl EVMAdapter {
 }
 
 impl BlockchainAdapter for EVMAdapter {
-    fn chain_name(&self) -> &str {
-        &self.chain_name
-    }
+    // fn chain_name(&self) -> &str {
+    //     &self.chain_name
+    // }
 
     fn get_block_by_number(
         &self,

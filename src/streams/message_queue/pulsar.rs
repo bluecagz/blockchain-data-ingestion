@@ -2,6 +2,7 @@ use anyhow::Result;
 use pulsar::{Pulsar, Producer, Consumer, ConsumerOptions, SubType, TokioExecutor};
 use pulsar::consumer::InitialPosition;
 use pulsar::DeserializeMessage;
+use pulsar::message::Message;
 
 #[derive(Clone)]
 pub struct PulsarClient {
@@ -20,7 +21,7 @@ pub async fn create_producer(client: &PulsarClient, topic: &str) -> Result<Produ
     Ok(producer)
 }
 
-pub async fn create_consumer<T: DeserializeMessage>(client: &PulsarClient, topic: &str, subscription: &str) -> Result<Consumer<T, TokioExecutor>> {
+pub async fn create_consumer<T: DeserializeMessage>(client: &PulsarClient, topic: &str, subscription: &str) -> Result<Consumer<Message, TokioExecutor>> {
     let consumer = client.client
         .consumer()
         .with_topic(topic)

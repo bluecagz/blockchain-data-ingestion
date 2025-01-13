@@ -3,8 +3,8 @@ use futures_core::{Future, Stream};
 use ethers::types::{Block, Transaction};
 use anyhow::Result as AnyResult;
 
-pub trait BlockchainAdapter {
-    fn chain_name(&self) -> &str;
+pub trait BlockchainAdapter: Send + Sync {
+    // fn chain_name(&self) -> &str;
 
     /// Fetches a block by its number.
     fn get_block_by_number(
