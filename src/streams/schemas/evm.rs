@@ -8,6 +8,7 @@ use super::schema::MessageSchema;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockSchema {
     pub number: U256,
+    pub chain_name: String,
     pub hash: H256,
     pub parent_hash: H256,
     pub nonce: Option<H256>,
@@ -32,6 +33,7 @@ pub struct BlockSchema {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TransactionSchema {
     pub hash: H256,
+    pub chain_name: String,
     pub nonce: U256,
     pub block_hash: Option<H256>,
     pub block_number: Option<U256>,
