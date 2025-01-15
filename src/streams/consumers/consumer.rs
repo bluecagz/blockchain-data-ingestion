@@ -7,5 +7,5 @@ use sqlx::postgres::PgPool;
 #[async_trait]
 pub trait StreamConsumer {
     /// Consume messages from a stream (e.g. Pulsar) and store them (e.g. in PostgreSQL).
-    async fn postgres_consume(&mut self, pg_pool: &PgPool) -> Result<()>;
+    async fn postgres_consume(&mut self, pg_pool: &PgPool, chain: &str) -> Result<()>;
 }

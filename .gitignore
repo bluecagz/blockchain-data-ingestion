@@ -3,3 +3,4 @@
 output_files
 database_setup.md
 /utils
+*.DS_Store

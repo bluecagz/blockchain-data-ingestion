@@ -20,7 +20,8 @@ use crate::streams::schemas::evm::{BlockSchema, TransactionSchema};
 pub struct EVMConsumer {
     pulsar: Arc<Mutex<PulsarClient>>,
     consumer_topic: String,
-    consumer_subscription: String
+    consumer_subscription: String,
+    pg_pool: Arc<Mutex<PgPool>>
 }
 
 impl EVMConsumer {
@@ -28,22 +29,24 @@ impl EVMConsumer {
         pulsar: Arc<Mutex<PulsarClient>>,
         consumer_topic: String,
         consumer_subscription: String,
+        pg_pool: Arc<Mutex<PgPool>>
     ) -> Self {
         Self {
             pulsar,
             consumer_topic,
             consumer_subscription,
+            pg_pool
         }
     }
   
-    pub async fn insert_block_data(&self, pg_pool: &PgPool, chain_name: &str, block: &BlockSchema) -> Result<()> {
-        let block_number_i64 = block.number.as_u64() as i64;
-        let gas_used_i64 = block.gas_used.as_u64() as i64;
-        let gas_limit_i64 = block.gas_limit.as_u64() as i64;
-        let size_i64 = block.size.expect("Block size error!").as_u64() as i64;
-        let difficulty_i64 = block.difficulty.as_u64() as i64;
-        let timestamp_i64 = block.timestamp.as_u64() as i64;
-        let tx_count_i64 = block.transactions.len() as i64;
+    pub async fn insert_block_data(&self, chain_name: &str, block: &BlockSchema) -> Result<()> {
+        let block_number_i64 = block.number.as_i64();
+        let gas_used_i64 = block.gas_used.as_i64();
+        let gas_limit_i64 = block.gas_limit.as_i64();
+        let size_i64 = block.size.expect("Block size error!").as_i64();
+        let difficulty_i64 = block.difficulty.as_i64();
+        let timestamp_i64 = block.timestamp.as_i64();
+        let tx_count_i64 = block.transactions.len();
         let transactions_json = json!(block.transactions);
 
         let mut tx = self.pg_pool.begin().await?;
@@ -82,10 +85,13 @@ impl EVMConsumer {
         Ok(())
     }
 
-    pub async fn insert_transaction_data(&self, pg_pool: &PgPool, block_number: i64, chain_name: &str, transaction: &TransactionSchema) -> Result<()> {
+     // TODO: add transaction data to the database
+    pub async fn insert_transaction_data(&self, block_number: i64, chain_name: &str, transaction: &TransactionSchema) -> Result<()> {
         
         let mut tx = self.pg_pool.begin().await?;
         
+        // TODO: update casting to correct types
+       
         sqlx::query!(
             "INSERT INTO transactions (block_number, chain_name, tx_hash, from_address, to_address, value, gas_price, gas, input, nonce) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             block_number,
@@ -97,7 +103,7 @@ impl EVMConsumer {
             transaction.gas_price.to_string(),
             transaction.gas.to_string(),
             transaction.input.to_string(),
-            transaction.nonce.as_u64() as i64
+            transaction.nonce.as_i64()
         )
         .execute(tx)
         .await
@@ -114,26 +120,23 @@ impl EVMConsumer {
 
 #[async_trait]
 impl<T: DeserializeMessage> StreamConsumer for EVMConsumer {
-    async fn postgres_consume(&mut self, pg_pool: &PgPool, chain_name: &str) -> Result<()> {
+    async fn postgres_consume(&mut self, chain_name: &str) -> Result<()> {
         let pulsar_client = self.pulsar.lock().await;
         let mut consumer = create_consumer::<T>(&*pulsar_client, &self.consumer_topic, &self.consumer_subscription).await?;
-
+        
         while let Some(msg_res) = consumer.next().await {
             match msg_res {
                 Ok(msg) => {
-                    let payload_bytes: Vec<u8> = msg.payload.data.to_vec();
-                    let payload_str = String::from_utf8(payload_bytes).map_err(|e| {
-                        error!("Failed to convert payload to String: {}", e);
-                        anyhow::anyhow!(e)
-                    })?;
-
-                    let block_message: BlockSchema = serde_json::from_str(&payload_str).map_err(|e| {
-                        error!("Failed to deserialize message: {}", e);
-                        anyhow::anyhow!(e)
-                    })?;
-
-                    self.insert_block_data(&pg_pool, &chain_name, &block_message).await?;
-
+                    let block_message: BlockSchema = match msg.deserialize() {
+                        Ok(data) => data,
+                        Err(e) => {
+                            error!("Failed to deserialize message: {:?}", e);
+                            break;
+                        }
+                    };
+        
+                    self.insert_block_data(&chain_name, &block_message).await?;
+        
                     consumer.ack(&msg).await.map_err(|e: anyhow::Error| {
                         error!("Failed to ACK message: {}", e);
                         anyhow::anyhow!(e)

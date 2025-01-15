@@ -16,7 +16,7 @@ impl PulsarClient {
     }
 }
 
-pub async fn create_producer(client: &PulsarClient, topic: &str) -> Result<Producer<TokioExecutor>> {
+pub async fn create_producer(client: PulsarClient, topic: &str) -> Result<Producer<TokioExecutor>> {
     let producer = client.client.producer().with_topic(topic).build().await?;
     Ok(producer)
 }

@@ -14,6 +14,7 @@ use std::env;
 use dotenv::dotenv;
 use std::collections::HashMap;
 use serde::Deserialize;
+use sqlx::PgPool;
 
 use crate::streams::message_queue::pulsar::PulsarClient;
 use crate::blockchain::evm_adapter::EVMAdapter;
@@ -97,15 +98,14 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
                         consumers_vec.push((&chain_name, producer_topic_hist.clone()));
 
                         let adapter_clone_hist = Arc::new(Mutex::new(adapter.clone()));
-                        // let chain_name_hist = chain_name.clone();
-                        let pulsar_clone_hist = pulsar.clone();
+                        let pulsar_clone_hist = Arc::clone(&pulsar);
 
                         let end_block = chain_cfg.end_block.unwrap_or(u64::MAX);
                         tasks.push(task::spawn_blocking(move || {
                             let rt = Builder::new_multi_thread().enable_all().build().unwrap();
                             rt.block_on(async move {
                                 // Create an EVMProducer for historical production.
-                                let evm_producer = EVMProducer::new(adapter_clone_hist, pulsar_clone_hist, &producer_topic_hist).await?;
+                                let evm_producer = EVMProducer::new(adapter_clone_hist, pulsar_clone_hist, producer_topic_hist).await?;
                                 evm_producer.produce_historical(start_block, end_block).await?;
                                 Ok::<(), anyhow::Error>(())
                             })
@@ -113,13 +113,12 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
                     }
 
                     // Real-time ingestion task.
-                    //let chain_name_rt = chain_name.clone();
-                    let pulsar_clone_rt = pulsar.clone();
+                    let pulsar_clone_rt = Arc::clone(&pulsar);
                     tasks.push(task::spawn_blocking(move || {
                         let rt = Builder::new_multi_thread().enable_all().build().unwrap();
                         rt.block_on(async move {
                             // Create an EVMProducer for real-time production.
-                            let evm_producer = EVMProducer::new(adapter_clone_rt, pulsar_clone_rt, &chain_name, &producer_topic).await?;
+                            let evm_producer = EVMProducer::new(adapter_clone_rt, pulsar_clone_rt, producer_topic).await?;
                             evm_producer.produce_realtime().await?;
                             Ok::<(), anyhow::Error>(())
                         })
@@ -139,12 +138,15 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
     // by concating the topic with "-subscription"
     let consumer_subscription_vec = consumers_vec
                                     .iter()
-                                    .map(|consumer| (consumer.0.clone(). consumer.1.clone(), consumer.1.clone() + "-subscription"))
-                                    .collect::<Vec<(String, String)>>();
+                                    .map(|consumer| (consumer.0.clone(), consumer.1.clone(), consumer.1.clone() + "-subscription"))
+                                    .collect::<Vec<(String, String, String)>>();
+
+    let pg_pool_arc = Arc::new(Mutex::new(pool));
 
     for (chain_name, consumer_topic, consumer_subscription) in consumer_subscription_vec {
-        let pulsar_clone_consumer = pulsar.clone();
-        let pg_pool_clone = pool.clone();
+        let pulsar_clone_consumer = Arc::clone(&pulsar);
+
+        let pg_pool_clone: Arc<Mutex<&PgPool>> = Arc::clone(&pg_pool_arc);
         tasks.push(task::spawn_blocking(move || -> Result<()> {
             let rt = Builder::new_multi_thread().enable_all().build().unwrap();
             rt.block_on(async move {
@@ -152,9 +154,10 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
                     pulsar_clone_consumer,
                     consumer_topic.clone(),
                     consumer_subscription.clone(),
+                    pg_pool_clone,
                 ).await;
 
-                if let Err(e) = evm_consumer.postgres_consume(&pg_pool_clone, &chain_name).await {
+                if let Err(e) = evm_consumer.postgres_consume(pg_pool_clone, &chain_name).await {
                     error!("Consumer error: {}", e);
                 }
             });
