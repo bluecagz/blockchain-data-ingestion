@@ -18,38 +18,36 @@ use crate::streams::schemas::evm::{BlockSchema, TransactionSchema};
 /// EVMConsumer encapsulates the configuration needed for consuming messages
 /// from a Pulsar topic and storing them in PostgreSQL.
 pub struct EVMConsumer {
-    pulsar: Arc<Mutex<PulsarClient>>,
+    pulsar: Arc<PulsarClient>,
     consumer_topic: String,
-    consumer_subscription: String,
-    pg_pool: Arc<Mutex<PgPool>>
+    consumer_subscription: String
 }
 
 impl EVMConsumer {
     pub async fn new(
-        pulsar: Arc<Mutex<PulsarClient>>,
+        pulsar: Arc<PulsarClient>,
         consumer_topic: String,
-        consumer_subscription: String,
-        pg_pool: Arc<Mutex<PgPool>>
+        consumer_subscription: String
     ) -> Self {
         Self {
             pulsar,
             consumer_topic,
-            consumer_subscription,
-            pg_pool
+            consumer_subscription
         }
     }
   
-    pub async fn insert_block_data(&self, chain_name: &str, block: &BlockSchema) -> Result<()> {
-        let block_number_i64 = block.number.as_i64();
-        let gas_used_i64 = block.gas_used.as_i64();
-        let gas_limit_i64 = block.gas_limit.as_i64();
-        let size_i64 = block.size.expect("Block size error!").as_i64();
-        let difficulty_i64 = block.difficulty.as_i64();
-        let timestamp_i64 = block.timestamp.as_i64();
-        let tx_count_i64 = block.transactions.len();
+    pub async fn insert_block_data(&self, pg_pool: &PgPool, chain_name: &str, block: &BlockSchema) -> Result<()> {
+        let block_number_i64 = block.number.as_u64() as i64;
+        let gas_used_i64 = block.gas_used.as_u64() as i64;
+        let gas_limit_i64 = block.gas_limit.as_u64() as i64;
+        let size_i64 = block.size.expect("Block size error!").as_u64() as i64;
+        let difficulty_i64 = block.difficulty.as_u64() as i64;
+        let timestamp_i64 = block.timestamp.as_u64() as i64;
+        let tx_count_i64 = block.transactions.len() as i64;
         let transactions_json = json!(block.transactions);
 
-        let mut tx = self.pg_pool.begin().await?;
+        let mut tx = pg_pool.begin().await?;
+
 
         sqlx::query!(
             "INSERT INTO blocks (block_number, chain_name, hash, parent_hash, timestamp, miner, difficulty, total_difficulty, gas_used, gas_limit, size, receipts_root, tx_count, transactions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
@@ -86,12 +84,10 @@ impl EVMConsumer {
     }
 
      // TODO: add transaction data to the database
-    pub async fn insert_transaction_data(&self, block_number: i64, chain_name: &str, transaction: &TransactionSchema) -> Result<()> {
-        
-        let mut tx = self.pg_pool.begin().await?;
-        
-        // TODO: update casting to correct types
-       
+    pub async fn insert_transaction_data(&self, pg_pool: &PgPool, block_number: i64, chain_name: &str, transaction: &TransactionSchema) -> Result<()> {
+        let mut tx = pg_pool.begin().await?;
+
+        // TODO: update casting to correct types       
         sqlx::query!(
             "INSERT INTO transactions (block_number, chain_name, tx_hash, from_address, to_address, value, gas_price, gas, input, nonce) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             block_number,
@@ -103,9 +99,9 @@ impl EVMConsumer {
             transaction.gas_price.to_string(),
             transaction.gas.to_string(),
             transaction.input.to_string(),
-            transaction.nonce.as_i64()
+            transaction.nonce.as_u64() as i64
         )
-        .execute(tx)
+        .execute(&mut tx)
         .await
         .map_err(|e: sqlx::Error| {
             error!("Failed to insert transaction data into PostgreSQL: {}", e);
@@ -119,10 +115,9 @@ impl EVMConsumer {
 }
 
 #[async_trait]
-impl<T: DeserializeMessage> StreamConsumer for EVMConsumer {
-    async fn postgres_consume(&mut self, chain_name: &str) -> Result<()> {
-        let pulsar_client = self.pulsar.lock().await;
-        let mut consumer = create_consumer::<T>(&*pulsar_client, &self.consumer_topic, &self.consumer_subscription).await?;
+impl StreamConsumer for EVMConsumer {
+    async fn postgres_consume(&mut self, pg_pool: Arc<PgPool>, chain_name: &str) -> Result<()> {
+        let mut consumer = create_consumer(&self.pulsar_client, &self.consumer_topic, &self.consumer_subscription).await?;
         
         while let Some(msg_res) = consumer.next().await {
             match msg_res {
@@ -135,7 +130,7 @@ impl<T: DeserializeMessage> StreamConsumer for EVMConsumer {
                         }
                     };
         
-                    self.insert_block_data(&chain_name, &block_message).await?;
+                    self.insert_block_data(&pg_pool, &chain_name, &block_message).await?;
         
                     consumer.ack(&msg).await.map_err(|e: anyhow::Error| {
                         error!("Failed to ACK message: {}", e);

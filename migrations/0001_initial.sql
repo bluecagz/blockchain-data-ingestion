@@ -5,8 +5,8 @@ DROP TABLE IF EXISTS blocks;
 -- Recreate the blocks table
 CREATE TABLE blocks (
     id SERIAL PRIMARY KEY,
-    chain_name TEXT NOT NULL,
     block_number BIGINT NOT NULL,
+    chain_name TEXT NOT NULL,
     hash TEXT NOT NULL,
     parent_hash TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,

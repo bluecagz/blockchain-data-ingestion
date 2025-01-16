@@ -16,12 +16,12 @@ impl PulsarClient {
     }
 }
 
-pub async fn create_producer(client: PulsarClient, topic: &str) -> Result<Producer<TokioExecutor>> {
+pub async fn create_producer(client: &PulsarClient, topic: String) -> Result<Producer<TokioExecutor>> {
     let producer = client.client.producer().with_topic(topic).build().await?;
     Ok(producer)
 }
 
-pub async fn create_consumer<T: DeserializeMessage>(client: &PulsarClient, topic: &str, subscription: &str) -> Result<Consumer<Message, TokioExecutor>> {
+pub async fn create_consumer<T: DeserializeMessage>(client: &PulsarClient, topic: String, subscription: &str) -> Result<Consumer<T, TokioExecutor>> {
     let consumer = client.client
         .consumer()
         .with_topic(topic)
