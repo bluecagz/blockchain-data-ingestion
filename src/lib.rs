@@ -14,6 +14,7 @@ use std::env;
 use dotenv::dotenv;
 use std::collections::HashMap;
 use serde::Deserialize;
+use sqlx::PgPool;
 
 use crate::streams::message_queue::pulsar::PulsarClient;
 use crate::blockchain::evm_adapter::EVMAdapter;
@@ -38,7 +39,7 @@ pub struct ConfigToml {
     pub blockchains: HashMap<String, BlockchainConfig>,
 }
 
-pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
+pub async fn run_ingestion(pool: Arc<PgPool>, pulsar: Arc<PulsarClient>) -> Result<()> {
     // Load environment variables from the .env file.
     dotenv().ok();
 
@@ -56,11 +57,7 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
             .with_context(|| format!("Failed to get WebSocket URL from environment for key `{}`", &chain_cfg.ws_url))?;
     }
 
-    // 3) Initialize Pulsar client and create a producer.
-    let pulsar_url = env::var("PULSAR_URL").unwrap_or_else(|_| "pulsar://127.0.0.1:6650".to_string());
-    let pulsar = Arc::new(Mutex::new(PulsarClient::new(&pulsar_url).await
-        .context("Failed to initialize Pulsar client")?));
-
+    // 3) Prepare the topic prefix for producers.
     let producer_topic_prefix = "persistent://public/default/".to_string();
 
     // 4) Prepare tasks for producing messages.
@@ -86,7 +83,7 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
                     let producer_topic = format!("{}{}-{}", &producer_topic_prefix, &chain_name, &schema);
 
                     // Add the producer_topic to the consumers_vec.
-                    consumers_vec.push(producer_topic.clone());
+                    consumers_vec.push((chain_name.clone(), producer_topic.clone()));
 
                     // Clone the adapter for different tasks.
                     let adapter_clone_rt = Arc::new(Mutex::new(adapter.clone()));
@@ -94,17 +91,17 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
                     // Historical ingestion task (if a start_block is provided).
                     if let Some(start_block) = chain_cfg.start_block {
                         let producer_topic_hist = producer_topic.clone() + "-historical";
-                        consumers_vec.push(producer_topic_hist.clone());
+                        consumers_vec.push((chain_name.clone(), producer_topic_hist.clone()));
 
                         let adapter_clone_hist = Arc::new(Mutex::new(adapter.clone()));
-                        
+                        let pulsar_clone_hist = Arc::clone(&pulsar);
+
                         let end_block = chain_cfg.end_block.unwrap_or(u64::MAX);
-                        let pulsar_clone_hist = pulsar.clone();
                         tasks.push(task::spawn_blocking(move || {
                             let rt = Builder::new_multi_thread().enable_all().build().unwrap();
                             rt.block_on(async move {
                                 // Create an EVMProducer for historical production.
-                                let evm_producer = EVMProducer::new(adapter_clone_hist, pulsar_clone_hist, &producer_topic_hist).await?;
+                                let evm_producer = EVMProducer::new(adapter_clone_hist, pulsar_clone_hist, producer_topic_hist).await?;
                                 evm_producer.produce_historical(start_block, end_block).await?;
                                 Ok::<(), anyhow::Error>(())
                             })
@@ -112,13 +109,12 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
                     }
 
                     // Real-time ingestion task.
-                    //let chain_name_rt = chain_name.clone();
-                    let pulsar_clone_rt = pulsar.clone();
+                    let pulsar_clone_rt = Arc::clone(&pulsar);
                     tasks.push(task::spawn_blocking(move || {
                         let rt = Builder::new_multi_thread().enable_all().build().unwrap();
                         rt.block_on(async move {
                             // Create an EVMProducer for real-time production.
-                            let evm_producer = EVMProducer::new(adapter_clone_rt, pulsar_clone_rt, &producer_topic).await?;
+                            let evm_producer = EVMProducer::new(adapter_clone_rt, pulsar_clone_rt, producer_topic).await?;
                             evm_producer.produce_realtime().await?;
                             Ok::<(), anyhow::Error>(())
                         })
@@ -138,22 +134,24 @@ pub async fn run_ingestion(pool: &sqlx::PgPool) -> Result<()> {
     // by concating the topic with "-subscription"
     let consumer_subscription_vec = consumers_vec
                                     .iter()
-                                    .map(|topic| (topic.clone(), topic.clone() + "-subscription"))
-                                    .collect::<Vec<(String, String)>>();
+                                    .map(|consumer| (consumer.0.clone(), consumer.1.clone(), consumer.1.clone() + "-subscription"))
+                                    .collect::<Vec<(String, String, String)>>();
 
-    for (consumer_topic, consumer_subscription) in consumer_subscription_vec {
-        let pulsar_clone_consumer = pulsar.clone();
-        let pg_pool_clone = pool.clone();
+
+    for (chain_name, consumer_topic, consumer_subscription) in consumer_subscription_vec {
+        let pulsar_clone_consumer = Arc::clone(&pulsar);
+        let pg_pool_clone = Arc::clone(&pool);
+
         tasks.push(task::spawn_blocking(move || -> Result<()> {
             let rt = Builder::new_multi_thread().enable_all().build().unwrap();
             rt.block_on(async move {
                 let mut evm_consumer = EVMConsumer::new(
                     pulsar_clone_consumer,
                     consumer_topic.clone(),
-                    consumer_subscription.clone(),
+                    consumer_subscription.clone()
                 ).await;
 
-                if let Err(e) = evm_consumer.postgres_consume(&pg_pool_clone).await {
+                if let Err(e) = evm_consumer.postgres_consume(pg_pool_clone, &chain_name).await {
                     error!("Consumer error: {}", e);
                 }
             });

@@ -7,30 +7,29 @@ use std::future::Future;
 use pulsar::{Producer, TokioExecutor};
 use pulsar::message::{Message, Payload};
 use crate::blockchain::adapters::BlockchainAdapter;
-use ethers::types::{Block, Transaction};
 use futures_core::Stream;
 use std::pin::Pin;
 use crate::streams::producers::producer::StreamProducer;
 use crate::streams::message_queue::pulsar::{create_producer, PulsarClient};
-
-
+use alloy_network_primitives::{BlockResponse, BlockTransactionsKind};
 
 pub struct EVMProducer {
     adapter: Arc<Mutex<dyn BlockchainAdapter>>,
     producer: Arc<Mutex<Producer<TokioExecutor>>>,
+    producer_topic: String,
 }
 
 impl EVMProducer {
     pub async fn new(
         adapter: Arc<Mutex<dyn BlockchainAdapter>>,
-        pulsar: Arc<Mutex<PulsarClient>>,
-        producer_topic: &str,
+        pulsar: Arc<PulsarClient>,
+        producer_topic: String,
     ) -> Result<Self> {
-        let pulsar_client = pulsar.lock().await;
-        let producer = create_producer(&*pulsar_client, producer_topic).await?;
+        let producer = create_producer(&pulsar, producer_topic.clone()).await?;
         Ok(Self {
             adapter,
             producer: Arc::new(Mutex::new(producer)),
+            producer_topic,
         })
     }
 }
@@ -80,7 +79,7 @@ impl<A: BlockchainAdapter + Send + Sync + 'static> BlockchainAdapter for Arc<Mut
     fn get_block_by_number(
         &self,
         block_number: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Block<Transaction>>>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = AnyResult<Option<BlockTransactions>>> + Send>> {
         let adapter = self.clone();
         Box::pin(async move {
             adapter.lock().await.get_block_by_number(block_number).await
@@ -89,10 +88,11 @@ impl<A: BlockchainAdapter + Send + Sync + 'static> BlockchainAdapter for Arc<Mut
 
     fn subscribe_new_blocks(
         &self,
-    ) -> Pin<Box<dyn Stream<Item = Result<Block<Transaction>>> + Send>> {
-        let adapter = self.clone();
+        kind: BlockTransactionsKind, // Add a parameter to specify the kind
+    ) -> Pin<Box<dyn Stream<Item = Result<BlockTransactions<Block>>> + Send>> {
+        let adapter = self.adapter.clone();
         Box::pin(async_stream::stream! {
-            let mut stream = adapter.lock().await.subscribe_new_blocks();
+            let mut stream = adapter.lock().await.subscribe_new_blocks(kind);
             while let Some(block) = stream.next().await {
                 yield block;
             }
@@ -101,8 +101,8 @@ impl<A: BlockchainAdapter + Send + Sync + 'static> BlockchainAdapter for Arc<Mut
 
     fn get_latest_block_number(
         &self,
-    ) -> Pin<Box<dyn Future<Output = Result<u64>> + Send>> {
-        let adapter = self.clone();
+    ) -> Pin<Box<impl Future<Output = Result<u64>> + Send>> {
+        let adapter = self.adapter.clone();
         Box::pin(async move {
             adapter.lock().await.get_latest_block_number().await
         })

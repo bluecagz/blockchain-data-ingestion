@@ -19,9 +19,14 @@ async fn main() -> anyhow::Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
+    let pg_pool = Arc::new(pool);
+
+    let pulsar_url = env::var("PULSAR_URL").unwrap_or_else(|_| "pulsar://127.0.0.1:6650".to_string());
+    let pulsar = Arc::new(PulsarClient::new(&pulsar_url).await?);
+
 
     // Start the ingestion process
-    run_ingestion(&pool).await?;
+    run_ingestion(pg_pool, pulsar).await?;
 
     Ok(())
 }
