@@ -151,7 +151,7 @@ pub async fn run_ingestion(pool: Arc<PgPool>, pulsar: Arc<PulsarClient>) -> Resu
                     consumer_subscription.clone()
                 ).await;
 
-                if let Err(e) = evm_consumer.postgres_consume(&pg_pool_clone, &chain_name).await {
+                if let Err(e) = evm_consumer.postgres_consume(pg_pool_clone, &chain_name).await {
                     error!("Consumer error: {}", e);
                 }
             });
