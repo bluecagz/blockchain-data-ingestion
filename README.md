@@ -44,27 +44,27 @@ This repository centralizes the ingestion logic, schemas, transformations, and c
 ## Architecture
 
 ```mermaid
-flowchart TD
-    A[Blockchain Network] --> B[Data Connector/Fetcher (EVMAdapter)]
-    B --> C[Data Processing/Transformation]
-    C --> D[Postgres / DuckDB]
-    D --> E[Analytics & Visualization / Services / Endpoints]
+flowchart LR
+    A["`Node RPC Provider
+        (Infura/Quicknode)`"] -->|Websocket or 
+                                  Poll for blocks| B[Producer]
+
+   subgraph K8sCluster [Kubernetes Cluster]
+      subgraph PulsarResources [Pulsar Resources]
+         B --> C[Topic]
+         C --> D[Consumer]
+      end
+      D -->|Insert| E["`Postgres Tables:
+                       Blocks
+                       Transactions`"]
+   end
+   style PulsarResources fill:stroke:#f66,stroke-width:2px,color:#fff,stroke-dasharray: 5 5
 ```
 
-1. **Data Connector/Fetcher**  
-   - Connect to blockchain nodes or provider APIs (Infura, Alchemy, self-hosted, etc.) via adapters like `EVMAdapter`.
-
-2. **Data Processing/Transformation**  
-   - Apply transformations, parse logs, decode ABI events, and clean data into a usable format.
-
-3. **Postgres / DuckDB**  
-   - Store structured data in your preferred SQL engine (Postgres or DuckDB).  
-     - **Postgres** for more traditional client-server setups.  
-     - **DuckDB** for local analytics, small-footprint embedding, or single-file portability.
-
-4. **Analytics & Visualization / Services / Endpoints**  
-   - Consume data for queries or dashboards.  
-   - Build custom endpoints on top of your ingested data to power web services or APIs.
+1. Data is retrieved from a node RPC provider (Infura or QuickNode).
+2. A Pulsar producer ingests that data into a Pulsar topic.
+3. A Pulsar consumer reads messages from that topic and writes them to postgres
+4. In Postgres two tables are created (blocks & transactions tables).
 
 ---
 
@@ -165,8 +165,6 @@ ARBITRUM_URL_WS="wss://arb-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
 ---
 
 ## Data Models
-
-Depending on your schema, you might store data in tables such as:
 
 - **Blocks**  
   - `block_number`  
