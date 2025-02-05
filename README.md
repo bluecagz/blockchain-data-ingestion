@@ -1,5 +1,7 @@
 # Blockchain Data Ingestion (WIP)
 
+***Project Progress***:  `[##--------]` 15%
+
 A **Rust-based** solution for ingesting, transforming, and storing blockchain data from various networks. The project aims to make it straightforward to collect meaningful on-chain data—like blocks, transactions, logs, or custom events—and load it into a **Postgres** or **DuckDB** database for further analysis. The codebase can be run locally on your machine or deployed to a server environment.
 
 ---
