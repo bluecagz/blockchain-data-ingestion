@@ -11,7 +11,7 @@ use futures_core::Stream;
 use std::pin::Pin;
 use crate::streams::producers::producer::StreamProducer;
 use crate::streams::message_queue::pulsar::{create_producer, PulsarClient};
-use alloy_network_primitives::{BlockResponse, BlockTransactionsKind};
+use alloy_network_primitives::{BlockResponse, BlockTransactions, BlockTransactionsKind};
 
 pub struct EVMProducer {
     adapter: Arc<Mutex<dyn BlockchainAdapter>>,
@@ -79,7 +79,7 @@ impl<A: BlockchainAdapter + Send + Sync + 'static> BlockchainAdapter for Arc<Mut
     fn get_block_by_number(
         &self,
         block_number: u64,
-    ) -> Pin<Box<dyn Future<Output = AnyResult<Option<BlockTransactions>>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Option<BlockTransactions>>> + Send>> {
         let adapter = self.clone();
         Box::pin(async move {
             adapter.lock().await.get_block_by_number(block_number).await
