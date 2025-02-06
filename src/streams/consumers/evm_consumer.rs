@@ -2,14 +2,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use log::error;
 use sqlx::PgPool;
-use serde_json::{json, Value};
-use futures_util::StreamExt;
-use pulsar::message;
-use pulsar::DeserializeMessage;
+use serde_json::{Value};
+// use futures_util::StreamExt;
+// use pulsar::message;
+// use pulsar::DeserializeMessage;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use alloy_primitives::{U256, Address, B256};
+// use tokio::sync::Mutex;
+// use alloy_primitives::{U256, Address, B256};
 use alloy_network_primitives::{BlockResponse, TransactionResponse, BlockTransactions};
+use sqlx::types::time::PrimitiveDateTime;
 
 use crate::streams::message_queue::pulsar::{create_consumer, PulsarClient};
 use crate::streams::consumers::consumer::StreamConsumer;
@@ -113,7 +114,7 @@ impl StreamConsumer for EVMConsumer {
         while let Some(msg_res) = consumer.next().await {
             match msg_res {
                 Ok(msg) => {
-                    let block_message: BlockTransactions<impl TransactionResponse> = match msg.deserialize() {
+                    let block_message: BlockTransactions = match msg.deserialize() {
                         Ok(data) => data,
                         Err(e) => {
                             error!("Failed to deserialize message: {:?}", e);

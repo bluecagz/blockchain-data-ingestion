@@ -2,7 +2,7 @@ use anyhow::Result;
 use pulsar::{Pulsar, Producer, Consumer, ConsumerOptions, SubType, TokioExecutor};
 use pulsar::consumer::InitialPosition;
 use pulsar::DeserializeMessage;
-use pulsar::message::Message;
+// use pulsar::message::Message;
 
 #[derive(Clone)]
 pub struct PulsarClient {

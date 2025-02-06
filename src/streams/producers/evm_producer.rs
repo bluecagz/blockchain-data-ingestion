@@ -5,13 +5,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::future::Future;
 use pulsar::{Producer, TokioExecutor};
-use pulsar::message::{Message, Payload};
+// use pulsar::message::{Message, Payload};
 use crate::blockchain::adapters::BlockchainAdapter;
 use futures_core::Stream;
 use std::pin::Pin;
 use crate::streams::producers::producer::StreamProducer;
 use crate::streams::message_queue::pulsar::{create_producer, PulsarClient};
-use alloy_network_primitives::{BlockResponse, BlockTransactions, BlockTransactionsKind};
+use alloy_network_primitives::{BlockTransactions, BlockTransactionsKind};
 
 pub struct EVMProducer {
     adapter: Arc<Mutex<dyn BlockchainAdapter>>,
@@ -89,8 +89,9 @@ impl<A: BlockchainAdapter + Send + Sync + 'static> BlockchainAdapter for Arc<Mut
     fn subscribe_new_blocks(
         &self,
         kind: BlockTransactionsKind, // Add a parameter to specify the kind
-    ) -> Pin<Box<dyn Stream<Item = Result<BlockTransactions<Block>>> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = Result<BlockTransactions>> + Send>> {
         let adapter = self.adapter.clone();
+        let kind = kind.unwrap_or(BlockTransactionsKind::Full);
         Box::pin(async_stream::stream! {
             let mut stream = adapter.lock().await.subscribe_new_blocks(kind);
             while let Some(block) = stream.next().await {

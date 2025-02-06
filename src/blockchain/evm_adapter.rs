@@ -6,7 +6,7 @@ use alloy::{
     transports::http::Http
 };
 use reqwest::Client;
-use alloy_network_primitives::{BlockResponse, BlockTransactionsKind, ReceiptResponse, BlockTransactions};
+use alloy_network_primitives::{BlockTransactionsKind, BlockTransactions};
 use std::sync::Arc;
 use futures_core::{Future, Stream};
 use anyhow::{Result as AnyResult, anyhow};
